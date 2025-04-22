@@ -1,6 +1,6 @@
 
 import { useState, useRef, useEffect } from 'react'
-import { Mic, Square, Loader2, Play, Pause } from 'lucide-react'
+import { Mic, Square, Loader2, Play, Pause, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card'
 import { supabase } from '@/lib/supabase'
@@ -15,6 +15,7 @@ export function VoiceRecorder() {
   const [recordingTime, setRecordingTime] = useState(0)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
+  const [audioFormat, setAudioFormat] = useState<string>('audio/webm')
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
@@ -78,11 +79,11 @@ export function VoiceRecorder() {
       
       // Check for supported MIME types
       const mimeTypes = [
-        'audio/mp3',
-        'audio/mpeg',
         'audio/webm',
         'audio/webm;codecs=opus',
-        'audio/ogg;codecs=opus'
+        'audio/ogg;codecs=opus',
+        'audio/mp4',
+        'audio/mpeg'
       ]
       
       let selectedMimeType = ''
@@ -98,6 +99,7 @@ export function VoiceRecorder() {
       }
       
       console.log("Using MIME type:", selectedMimeType || "browser default")
+      setAudioFormat(selectedMimeType || 'audio/webm')
       
       // Create MediaRecorder with selected MIME type
       const options: MediaRecorderOptions = selectedMimeType 
@@ -116,8 +118,12 @@ export function VoiceRecorder() {
       mediaRecorder.onstop = async () => {
         console.log("MediaRecorder stopped")
         
-        // Create audio blob from chunks
-        const audioBlob = new Blob(audioChunksRef.current)
+        // Create audio blob from chunks with explicit MIME type
+        const actualFormat = mediaRecorder.mimeType || selectedMimeType || 'audio/webm'
+        console.log("Final audio format:", actualFormat)
+        setAudioFormat(actualFormat)
+        
+        const audioBlob = new Blob(audioChunksRef.current, { type: actualFormat })
         console.log("Recording completed. Audio size:", Math.round(audioBlob.size / 1024), "KB")
         console.log("Audio MIME type:", audioBlob.type)
         
@@ -243,6 +249,32 @@ export function VoiceRecorder() {
     }
   }
 
+  const downloadAudio = () => {
+    if (!audioBlob || !audioUrl) return;
+    
+    // Get file extension based on MIME type
+    let fileExtension = '.webm';
+    if (audioFormat.includes('mp3') || audioFormat.includes('mpeg')) {
+      fileExtension = '.mp3';
+    } else if (audioFormat.includes('mp4')) {
+      fileExtension = '.mp4';
+    } else if (audioFormat.includes('ogg')) {
+      fileExtension = '.ogg';
+    }
+    
+    // Create a download link
+    const downloadLink = document.createElement('a');
+    downloadLink.href = audioUrl;
+    downloadLink.download = `recording-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}${fileExtension}`;
+    
+    // Append to the document, click, and remove
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+    
+    console.log(`Downloading audio as ${fileExtension} file`);
+  };
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
@@ -287,21 +319,37 @@ export function VoiceRecorder() {
         {audioUrl && (
           <div className="space-y-4">
             <div className="flex flex-col items-center gap-2">
-              <Button 
-                variant="outline" 
-                size="icon" 
-                onClick={togglePlayback}
-                className="h-12 w-12 rounded-full"
-              >
-                {isPlaying ? (
-                  <Pause className="h-6 w-6" />
-                ) : (
-                  <Play className="h-6 w-6" />
-                )}
-              </Button>
+              <div className="flex gap-2">
+                <Button 
+                  variant="outline" 
+                  size="icon" 
+                  onClick={togglePlayback}
+                  className="h-12 w-12 rounded-full"
+                >
+                  {isPlaying ? (
+                    <Pause className="h-6 w-6" />
+                  ) : (
+                    <Play className="h-6 w-6" />
+                  )}
+                </Button>
+                
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={downloadAudio}
+                  className="h-12 w-12 rounded-full"
+                  title="Download recording"
+                >
+                  <Download className="h-6 w-6" />
+                </Button>
+              </div>
               
               <div className="text-sm text-gray-500">
                 {isPlaying ? "Playing..." : "Click to play recording"}
+              </div>
+              
+              <div className="text-xs text-gray-400">
+                Format: {audioFormat.split(';')[0]}
               </div>
               
               {/* Actual audio element */}
