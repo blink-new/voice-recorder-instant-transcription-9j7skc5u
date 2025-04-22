@@ -1,10 +1,11 @@
 
 import { useState, useRef, useEffect } from 'react'
-import { Mic, Square, Loader2 } from 'lucide-react'
+import { Mic, Square, Loader2, Play, Pause, Volume2, VolumeX } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card'
 import { supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
+import { Slider } from '@/components/ui/slider'
 
 export function VoiceRecorder() {
   const [isRecording, setIsRecording] = useState(false)
@@ -14,10 +15,15 @@ export function VoiceRecorder() {
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
   const [recordingTime, setRecordingTime] = useState(0)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [volume, setVolume] = useState(1)
+  const [isMuted, setIsMuted] = useState(false)
+  const [isAudioVerified, setIsAudioVerified] = useState(false)
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const timerRef = useRef<number | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
 
   useEffect(() => {
     return () => {
@@ -30,14 +36,32 @@ export function VoiceRecorder() {
     }
   }, [audioUrl])
 
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = isMuted ? 0 : volume
+    }
+  }, [volume, isMuted])
+
   const startRecording = async () => {
     try {
       setError(null)
+      setTranscription('')
+      setAudioBlob(null)
+      setAudioUrl(null)
+      setIsAudioVerified(false)
       audioChunksRef.current = []
       
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      })
+      
       const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
+        mimeType: 'audio/webm;codecs=opus',
+        audioBitsPerSecond: 128000
       })
       
       mediaRecorderRef.current = mediaRecorder
@@ -52,11 +76,9 @@ export function VoiceRecorder() {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
         setAudioBlob(audioBlob)
         
-        // Create audio URL for debugging
+        // Create audio URL for playback
         const url = URL.createObjectURL(audioBlob)
         setAudioUrl(url)
-        
-        await transcribeAudio(audioBlob)
         
         // Stop all tracks from the stream
         stream.getTracks().forEach(track => track.stop())
@@ -91,14 +113,20 @@ export function VoiceRecorder() {
     }
   }
 
-  const transcribeAudio = async (blob: Blob) => {
+  const transcribeAudio = async () => {
+    if (!audioBlob) {
+      setError('No audio recorded')
+      return
+    }
+    
+    setIsAudioVerified(true)
+    setIsTranscribing(true)
+    setTranscription('')
+    
     try {
-      setIsTranscribing(true)
-      setTranscription('')
-      
       // Convert blob to base64
       const reader = new FileReader()
-      reader.readAsDataURL(blob)
+      reader.readAsDataURL(audioBlob)
       
       reader.onloadend = async () => {
         const base64Audio = reader.result as string
@@ -140,6 +168,29 @@ export function VoiceRecorder() {
     }
   }
 
+  const togglePlayback = () => {
+    if (audioRef.current) {
+      if (isPlaying) {
+        audioRef.current.pause()
+      } else {
+        audioRef.current.play()
+      }
+      setIsPlaying(!isPlaying)
+    }
+  }
+
+  const handleAudioEnded = () => {
+    setIsPlaying(false)
+  }
+
+  const toggleMute = () => {
+    setIsMuted(!isMuted)
+  }
+
+  const handleVolumeChange = (value: number[]) => {
+    setVolume(value[0])
+  }
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
@@ -151,7 +202,7 @@ export function VoiceRecorder() {
       <CardHeader className="text-center">
         <CardTitle className="text-2xl font-bold">Voice Recorder</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-6">
         <div className="flex justify-center">
           <div 
             className={cn(
@@ -182,8 +233,70 @@ export function VoiceRecorder() {
         )}
         
         {audioUrl && (
-          <div className="flex justify-center mt-2">
-            <audio src={audioUrl} controls className="w-full max-w-xs" />
+          <div className="space-y-3">
+            <div className="flex items-center justify-center gap-2">
+              <Button 
+                variant="outline" 
+                size="icon" 
+                onClick={togglePlayback}
+                className="h-10 w-10 rounded-full"
+              >
+                {isPlaying ? (
+                  <Pause className="h-5 w-5" />
+                ) : (
+                  <Play className="h-5 w-5" />
+                )}
+              </Button>
+              
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleMute}
+                className="h-8 w-8 rounded-full"
+              >
+                {isMuted ? (
+                  <VolumeX className="h-4 w-4" />
+                ) : (
+                  <Volume2 className="h-4 w-4" />
+                )}
+              </Button>
+              
+              <div className="w-48">
+                <Slider
+                  value={[volume]}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  onValueChange={handleVolumeChange}
+                />
+              </div>
+            </div>
+            
+            <audio 
+              ref={audioRef}
+              src={audioUrl} 
+              className="hidden"
+              onEnded={handleAudioEnded}
+            />
+            
+            <div className="text-center text-sm text-gray-500">
+              {isAudioVerified ? 
+                "Audio verified and sent for transcription" : 
+                "Please verify your audio before transcribing"
+              }
+            </div>
+            
+            {!isAudioVerified && (
+              <div className="flex justify-center">
+                <Button 
+                  onClick={transcribeAudio} 
+                  disabled={isTranscribing}
+                  className="mt-2"
+                >
+                  Verify and Transcribe
+                </Button>
+              </div>
+            )}
           </div>
         )}
         
