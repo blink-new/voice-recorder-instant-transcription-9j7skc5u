@@ -1,11 +1,10 @@
 
 import { useState, useRef, useEffect } from 'react'
-import { Mic, Square, Loader2, Play, Pause, Volume2, VolumeX } from 'lucide-react'
+import { Mic, Square, Loader2, Play, Pause } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card'
 import { supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
-import { Slider } from '@/components/ui/slider'
 
 export function VoiceRecorder() {
   const [isRecording, setIsRecording] = useState(false)
@@ -16,15 +15,13 @@ export function VoiceRecorder() {
   const [recordingTime, setRecordingTime] = useState(0)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [volume, setVolume] = useState(1)
-  const [isMuted, setIsMuted] = useState(false)
-  const [isAudioVerified, setIsAudioVerified] = useState(false)
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const timerRef = useRef<number | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
+  // Clean up resources when component unmounts
   useEffect(() => {
     return () => {
       if (timerRef.current) {
@@ -36,11 +33,25 @@ export function VoiceRecorder() {
     }
   }, [audioUrl])
 
+  // Handle audio playback state changes
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = isMuted ? 0 : volume
+    const audioElement = audioRef.current;
+    if (audioElement) {
+      const handlePlay = () => setIsPlaying(true);
+      const handlePause = () => setIsPlaying(false);
+      const handleEnded = () => setIsPlaying(false);
+
+      audioElement.addEventListener('play', handlePlay);
+      audioElement.addEventListener('pause', handlePause);
+      audioElement.addEventListener('ended', handleEnded);
+
+      return () => {
+        audioElement.removeEventListener('play', handlePlay);
+        audioElement.removeEventListener('pause', handlePause);
+        audioElement.removeEventListener('ended', handleEnded);
+      };
     }
-  }, [volume, isMuted])
+  }, [audioRef.current]);
 
   const startRecording = async () => {
     try {
@@ -48,7 +59,6 @@ export function VoiceRecorder() {
       setTranscription('')
       setAudioBlob(null)
       setAudioUrl(null)
-      setIsAudioVerified(false)
       audioChunksRef.current = []
       
       const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -74,6 +84,7 @@ export function VoiceRecorder() {
       
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        console.log("Recording completed. Audio size:", Math.round(audioBlob.size / 1024), "KB")
         setAudioBlob(audioBlob)
         
         // Create audio URL for playback
@@ -119,7 +130,6 @@ export function VoiceRecorder() {
       return
     }
     
-    setIsAudioVerified(true)
     setIsTranscribing(true)
     setTranscription('')
     
@@ -130,7 +140,7 @@ export function VoiceRecorder() {
       
       reader.onloadend = async () => {
         const base64Audio = reader.result as string
-        console.log("Audio size:", Math.round(base64Audio.length / 1024), "KB")
+        console.log("Audio size for transcription:", Math.round(base64Audio.length / 1024), "KB")
         
         try {
           // Call Supabase Edge Function
@@ -173,22 +183,22 @@ export function VoiceRecorder() {
       if (isPlaying) {
         audioRef.current.pause()
       } else {
-        audioRef.current.play()
+        // Ensure audio is loaded and ready to play
+        audioRef.current.load();
+        const playPromise = audioRef.current.play();
+        
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              console.log("Audio playback started successfully");
+            })
+            .catch(error => {
+              console.error("Audio playback failed:", error);
+              setError("Failed to play audio. Please try recording again.");
+            });
+        }
       }
-      setIsPlaying(!isPlaying)
     }
-  }
-
-  const handleAudioEnded = () => {
-    setIsPlaying(false)
-  }
-
-  const toggleMute = () => {
-    setIsMuted(!isMuted)
-  }
-
-  const handleVolumeChange = (value: number[]) => {
-    setVolume(value[0])
   }
 
   const formatTime = (seconds: number) => {
@@ -233,70 +243,47 @@ export function VoiceRecorder() {
         )}
         
         {audioUrl && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-center gap-2">
+          <div className="space-y-4">
+            <div className="flex flex-col items-center gap-2">
               <Button 
                 variant="outline" 
                 size="icon" 
                 onClick={togglePlayback}
-                className="h-10 w-10 rounded-full"
+                className="h-12 w-12 rounded-full"
               >
                 {isPlaying ? (
-                  <Pause className="h-5 w-5" />
+                  <Pause className="h-6 w-6" />
                 ) : (
-                  <Play className="h-5 w-5" />
+                  <Play className="h-6 w-6" />
                 )}
               </Button>
               
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggleMute}
-                className="h-8 w-8 rounded-full"
+              <div className="text-sm text-gray-500">
+                {isPlaying ? "Playing..." : "Click to play recording"}
+              </div>
+              
+              {/* Actual audio element */}
+              <audio 
+                ref={audioRef}
+                src={audioUrl} 
+                controls
+                className="w-full mt-2"
+                onError={(e) => {
+                  console.error("Audio error:", e);
+                  setError("Error playing audio. Please try recording again.");
+                }}
+              />
+            </div>
+            
+            <div className="flex justify-center">
+              <Button 
+                onClick={transcribeAudio} 
+                disabled={isTranscribing}
+                className="mt-2"
               >
-                {isMuted ? (
-                  <VolumeX className="h-4 w-4" />
-                ) : (
-                  <Volume2 className="h-4 w-4" />
-                )}
+                Transcribe Recording
               </Button>
-              
-              <div className="w-48">
-                <Slider
-                  value={[volume]}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  onValueChange={handleVolumeChange}
-                />
-              </div>
             </div>
-            
-            <audio 
-              ref={audioRef}
-              src={audioUrl} 
-              className="hidden"
-              onEnded={handleAudioEnded}
-            />
-            
-            <div className="text-center text-sm text-gray-500">
-              {isAudioVerified ? 
-                "Audio verified and sent for transcription" : 
-                "Please verify your audio before transcribing"
-              }
-            </div>
-            
-            {!isAudioVerified && (
-              <div className="flex justify-center">
-                <Button 
-                  onClick={transcribeAudio} 
-                  disabled={isTranscribing}
-                  className="mt-2"
-                >
-                  Verify and Transcribe
-                </Button>
-              </div>
-            )}
           </div>
         )}
         
