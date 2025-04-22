@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Simple, modern "B" with a hint of technology -->
+  <rect width="32" height="32" rx="8" fill="#1E1E1E"/>
+  <path d="M12 8h8a4 4 0 014 4v0a4 4 0 01-4 4h-8V8z" fill="#FFFFFF"/>
+  <path d="M12 16h9a4 4 0 014 4v0a4 4 0 01-4 4h-9V16z" fill="#FFFFFF"/>
+  <!-- Dot representing the "blink" -->
+  <circle cx="24" cy="8" r="2" fill="#3B82F6"/>
+</svg> 
