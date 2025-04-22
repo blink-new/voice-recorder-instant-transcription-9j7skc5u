@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card'
 import { supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
+import lamejs from 'lamejs'
 
 export function VoiceRecorder() {
   const [isRecording, setIsRecording] = useState(false)
@@ -17,7 +18,12 @@ export function VoiceRecorder() {
   const [isPlaying, setIsPlaying] = useState(false)
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const audioChunksRef = useRef<Blob[]>([])
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const audioInputRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const processorRef = useRef<ScriptProcessorNode | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const mp3EncoderRef = useRef<any>(null)
+  const mp3DataRef = useRef<Int8Array[]>([])
   const timerRef = useRef<number | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
@@ -30,6 +36,7 @@ export function VoiceRecorder() {
       if (audioUrl) {
         URL.revokeObjectURL(audioUrl)
       }
+      stopRecording()
     }
   }, [audioUrl])
 
@@ -59,7 +66,7 @@ export function VoiceRecorder() {
       setTranscription('')
       setAudioBlob(null)
       setAudioUrl(null)
-      audioChunksRef.current = []
+      mp3DataRef.current = []
       
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
@@ -69,34 +76,46 @@ export function VoiceRecorder() {
         } 
       })
       
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus',
-        audioBitsPerSecond: 128000
-      })
+      streamRef.current = stream
       
-      mediaRecorderRef.current = mediaRecorder
+      // Initialize AudioContext and nodes for MP3 encoding
+      const audioContext = new AudioContext()
+      audioContextRef.current = audioContext
       
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data)
+      const audioInput = audioContext.createMediaStreamSource(stream)
+      audioInputRef.current = audioInput
+      
+      // Create ScriptProcessorNode for audio processing
+      const processor = audioContext.createScriptProcessor(4096, 1, 1)
+      processorRef.current = processor
+      
+      // Initialize MP3 encoder
+      const mp3Encoder = new lamejs.Mp3Encoder(1, audioContext.sampleRate, 128)
+      mp3EncoderRef.current = mp3Encoder
+      
+      // Process audio data
+      processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0)
+        
+        // Convert float32 to int16
+        const samples = new Int16Array(inputData.length)
+        for (let i = 0; i < inputData.length; i++) {
+          // Scale to int16 range and clamp
+          samples[i] = Math.max(-32768, Math.min(32767, Math.floor(inputData[i] * 32768)))
+        }
+        
+        // Encode to MP3
+        const mp3Data = mp3Encoder.encodeBuffer(samples)
+        if (mp3Data.length > 0) {
+          mp3DataRef.current.push(mp3Data)
         }
       }
       
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-        console.log("Recording completed. Audio size:", Math.round(audioBlob.size / 1024), "KB")
-        setAudioBlob(audioBlob)
-        
-        // Create audio URL for playback
-        const url = URL.createObjectURL(audioBlob)
-        setAudioUrl(url)
-        
-        // Stop all tracks from the stream
-        stream.getTracks().forEach(track => track.stop())
-      }
+      // Connect the nodes
+      audioInput.connect(processor)
+      processor.connect(audioContext.destination)
       
       // Start recording
-      mediaRecorder.start(1000) // Collect data every second
       setIsRecording(true)
       setRecordingTime(0)
       
@@ -112,14 +131,60 @@ export function VoiceRecorder() {
   }
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop()
+    if (isRecording) {
       setIsRecording(false)
       
       // Clear timer
       if (timerRef.current) {
         window.clearInterval(timerRef.current)
         timerRef.current = null
+      }
+      
+      // Finalize MP3 encoding
+      if (mp3EncoderRef.current) {
+        const finalMp3 = mp3EncoderRef.current.flush()
+        if (finalMp3.length > 0) {
+          mp3DataRef.current.push(finalMp3)
+        }
+        
+        // Combine all MP3 chunks
+        let totalLength = 0
+        mp3DataRef.current.forEach(data => {
+          totalLength += data.length
+        })
+        
+        const mp3Data = new Uint8Array(totalLength)
+        let offset = 0
+        
+        mp3DataRef.current.forEach(data => {
+          mp3Data.set(data, offset)
+          offset += data.length
+        })
+        
+        // Create MP3 blob
+        const audioBlob = new Blob([mp3Data], { type: 'audio/mp3' })
+        console.log("Recording completed. MP3 size:", Math.round(audioBlob.size / 1024), "KB")
+        setAudioBlob(audioBlob)
+        
+        // Create audio URL for playback
+        const url = URL.createObjectURL(audioBlob)
+        setAudioUrl(url)
+      }
+      
+      // Clean up audio processing
+      if (processorRef.current && audioInputRef.current) {
+        audioInputRef.current.disconnect()
+        processorRef.current.disconnect()
+      }
+      
+      // Close AudioContext
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close()
+      }
+      
+      // Stop all tracks from the stream
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
       }
     }
   }
@@ -210,7 +275,7 @@ export function VoiceRecorder() {
   return (
     <Card className="w-full max-w-md mx-auto">
       <CardHeader className="text-center">
-        <CardTitle className="text-2xl font-bold">Voice Recorder</CardTitle>
+        <CardTitle className="text-2xl font-bold">Voice Recorder (MP3)</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="flex justify-center">
