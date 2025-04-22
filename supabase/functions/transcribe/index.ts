@@ -37,6 +37,8 @@ serve(async (req) => {
       })
     }
 
+    console.log("Received audio data, processing...");
+
     // Convert base64 to Blob
     const base64Data = audioData.split(',')[1]
     const byteCharacters = atob(base64Data)
@@ -48,24 +50,28 @@ serve(async (req) => {
     
     const byteArray = new Uint8Array(byteNumbers)
     const blob = new Blob([byteArray], { type: 'audio/webm' })
+    
+    console.log(`Audio blob created, size: ${blob.size} bytes`);
 
-    // Create a FormData object
-    const formData = new FormData()
-    formData.append('file', blob, 'audio.webm')
-    formData.append('model', 'whisper-1')
+    // Create a File object from the blob
+    const file = new File([blob], 'audio.webm', { type: 'audio/webm' })
+    
+    console.log("Calling OpenAI API...");
 
     // Call OpenAI API
     const transcription = await openai.audio.transcriptions.create({
-      file: new File([blob], 'audio.webm', { type: 'audio/webm' }),
+      file: file,
       model: 'whisper-1',
     })
+
+    console.log("OpenAI API response:", transcription);
 
     return new Response(JSON.stringify({ transcription }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   } catch (error) {
-    console.error('Error:', error.message)
-    return new Response(JSON.stringify({ error: error.message }), {
+    console.error('Error:', error.message, error.stack);
+    return new Response(JSON.stringify({ error: error.message, stack: error.stack }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })

@@ -13,6 +13,7 @@ export function VoiceRecorder() {
   const [error, setError] = useState<string | null>(null)
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
   const [recordingTime, setRecordingTime] = useState(0)
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
@@ -23,8 +24,11 @@ export function VoiceRecorder() {
       if (timerRef.current) {
         window.clearInterval(timerRef.current)
       }
+      if (audioUrl) {
+        URL.revokeObjectURL(audioUrl)
+      }
     }
-  }, [])
+  }, [audioUrl])
 
   const startRecording = async () => {
     try {
@@ -32,7 +36,9 @@ export function VoiceRecorder() {
       audioChunksRef.current = []
       
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mediaRecorder = new MediaRecorder(stream)
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus'
+      })
       
       mediaRecorderRef.current = mediaRecorder
       
@@ -45,6 +51,11 @@ export function VoiceRecorder() {
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
         setAudioBlob(audioBlob)
+        
+        // Create audio URL for debugging
+        const url = URL.createObjectURL(audioBlob)
+        setAudioUrl(url)
+        
         await transcribeAudio(audioBlob)
         
         // Stop all tracks from the stream
@@ -52,7 +63,7 @@ export function VoiceRecorder() {
       }
       
       // Start recording
-      mediaRecorder.start()
+      mediaRecorder.start(1000) // Collect data every second
       setIsRecording(true)
       setRecordingTime(0)
       
@@ -83,6 +94,7 @@ export function VoiceRecorder() {
   const transcribeAudio = async (blob: Blob) => {
     try {
       setIsTranscribing(true)
+      setTranscription('')
       
       // Convert blob to base64
       const reader = new FileReader()
@@ -90,21 +102,36 @@ export function VoiceRecorder() {
       
       reader.onloadend = async () => {
         const base64Audio = reader.result as string
+        console.log("Audio size:", Math.round(base64Audio.length / 1024), "KB")
         
-        // Call Supabase Edge Function
-        const { data, error } = await supabase.functions.invoke('transcribe', {
-          body: { audio: base64Audio }
-        })
-        
-        if (error) {
-          console.error('Error transcribing audio:', error)
-          setError('Failed to transcribe audio. Please try again.')
+        try {
+          // Call Supabase Edge Function
+          const { data, error } = await supabase.functions.invoke('transcribe', {
+            body: { audio: base64Audio }
+          })
+          
+          if (error) {
+            console.error('Error from Edge Function:', error)
+            setError(`Failed to transcribe audio: ${error.message}`)
+            setIsTranscribing(false)
+            return
+          }
+          
+          console.log("Transcription response:", data)
+          
+          if (data && data.transcription && data.transcription.text) {
+            setTranscription(data.transcription.text)
+          } else {
+            setError('Received empty transcription from server')
+            console.error('Empty transcription data:', data)
+          }
+          
           setIsTranscribing(false)
-          return
+        } catch (err) {
+          console.error('Error calling Edge Function:', err)
+          setError(`Error: ${err.message}`)
+          setIsTranscribing(false)
         }
-        
-        setTranscription(data.transcription.text)
-        setIsTranscribing(false)
       }
     } catch (err) {
       console.error('Error transcribing audio:', err)
@@ -151,6 +178,12 @@ export function VoiceRecorder() {
         {isRecording && (
           <div className="text-center font-mono text-xl">
             {formatTime(recordingTime)}
+          </div>
+        )}
+        
+        {audioUrl && (
+          <div className="flex justify-center mt-2">
+            <audio src={audioUrl} controls className="w-full max-w-xs" />
           </div>
         )}
         
